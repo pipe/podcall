@@ -11,6 +11,44 @@
     <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/font-awesome/4.7.0/css/font-awesome.min.css">
 
     <style>
+        body {
+            padding-bottom: 60px;
+        }
+        #chosenAction {
+            margin: 20px 0;
+        }
+        #chosenAction .btn {
+            margin: 0 10px;
+        }
+        .container {
+            margin-bottom: 20px;
+        }
+        #duration {
+            margin: 15px 0;
+            font-size: 1.2em;
+        }
+        .badge {
+            padding: 8px 12px;
+        }
+        footer {
+            margin-top: 40px;
+            padding: 20px 0;
+            border-top: 1px solid #ddd;
+            text-align: center;
+        }
+        footer span {
+            display: block;
+            margin: 5px 0;
+        }
+        .modal-body p {
+            margin-bottom: 15px;
+        }
+        .card {
+            margin-bottom: 15px;
+        }
+        .btn-sm {
+            margin: 0 5px;
+        }
     </style>
 
 </head>
@@ -30,7 +68,17 @@
 <div class="container">
         <div id="chosenAction" class="row">
             <button id="mute" type="button" class="btn btn-primary btn-lg"><i id="muteIcon" class="fa fa-microphone fa-2x" aria-hidden="true"></i></button>
-            <button id="stopCall" type="button" class="btn btn-primary btn-lg"><i id="stopIcon" class="fa fa-stop fa-2x" aria-hidden="true"></i></button>
+            <button id="startRecording" type="button" class="btn btn-success btn-lg" style="display: none;"><i id="startIcon" class="fa fa-circle fa-2x" aria-hidden="true"></i> Start Recording</button>
+            <button id="stopCall" type="button" class="btn btn-primary btn-lg" style="display: none;"><i id="stopIcon" class="fa fa-stop fa-2x" aria-hidden="true"></i></button>
+            <button id="restartCall" type="button" class="btn btn-warning btn-lg" style="display: none;"><i id="restartIcon" class="fa fa-refresh fa-2x" aria-hidden="true"></i> Restart</button>
+        </div>
+        <div class="row mt-3">
+            <div class="col">
+                <small>Mic Level:</small>
+                <div class="progress" style="height: 20px;">
+                    <div id="micLevel" class="progress-bar" role="progressbar" style="width: 0%;"></div>
+                </div>
+            </div>
         </div>
     <div>Duration <span class="badge badge-error" id="duration"></span></div>
     <div class="alert alert-danger" id="packetLoss">
@@ -40,6 +88,7 @@
         local <strong id="local"></strong><br/>
         <strong id="delay"></strong> sec delay<br/>
         remote <strong id="remote"></strong><br/>
+        <button id="viewCheckpoints" type="button" class="btn btn-sm btn-secondary mt-2">View Checkpoints</button>
     </div>
 </div>
 
@@ -51,9 +100,51 @@
             </div>
             <div class="modal-body" id="shareQR">
                 <p>Share this URL to request an interview</p>
+                <div class="form-group">
+                    <label for="shareUrl">Link URL:</label>
+                    <input type="text" class="form-control" id="shareUrl" readonly>
+                </div>
             </div>
             <div class="modal-footer">
                 <button id="shareDone" type="button" class="btn btn-secondary" data-dismiss="modal" onclick="shared();">Done</button>
+            </div>
+        </div>
+    </div>
+</div>
+<div id="restartConfirm" class="modal" tabindex="-1" role="dialog">
+    <div class="modal-dialog" role="document">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Confirm Restart</h5>
+                <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                    <span aria-hidden="true">&times;</span>
+                </button>
+            </div>
+            <div class="modal-body">
+                <p>Are you sure you want to clear the current recording and start over? This will delete any unsaved recordings.</p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-danger" id="confirmRestart">Yes, Clear and Restart</button>
+            </div>
+        </div>
+    </div>
+</div>
+<div id="stopConfirm" class="modal" tabindex="-1" role="dialog">
+    <div class="modal-dialog" role="document">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Confirm Stop</h5>
+                <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                    <span aria-hidden="true">&times;</span>
+                </button>
+            </div>
+            <div class="modal-body">
+                <p>Are you sure you want to end the recording?</p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-danger" id="confirmStop">Yes, Stop Recording</button>
             </div>
         </div>
     </div>
@@ -129,7 +220,7 @@
 <video id="nosleep" width="100" playsinline muted>
     Antisleep video.
 </video>
-<footer><span>See our <a href="https://github.com/pipe/podcall">Github</a> for source code</span>
+<footer><span>See our <a href="https://github.com/viteinfinite/podcall">Github</a> for source code</span>
     <span>See also <a href="https://rendezvous.berlin/privacy-policy.html">Privacy</a>
        and <a href="https://pi.pe/Impressum/index.html">Impressum</a></span>
 </footer>
@@ -152,16 +243,58 @@ websocketURL: "wss://pi.pe/websocket/?finger=" // where to find the redezvous se
     var localStream;
     var dcomp;
     var recorder;
+    var recorderHost;
+    var recorderGuest;
     var chunks = [];
+    var hostChunks = [];
+    var guestChunks = [];
     var saved = false;
+    var hostSaved = false;
+    var guestSaved = false;
     var startRecTime = 0;
     var lastLoss = 0;
     var lastRecv =0;
     var softstereo = true;
     var join;
 
+    // Safari-compatible MIME type detection
+    function getSupportedMimeType() {
+        const types = [
+            'audio/webm;codecs=opus',
+            'audio/webm;codecs=opus',
+            'audio/mp4',
+            'audio/aac'
+        ];
+
+        for (const type of types) {
+            if (MediaRecorder.isTypeSupported(type)) {
+                return type;
+            }
+        }
+        return ''; // Return empty if no supported type found
+    }
+
+    function getBlobMimeType() {
+        // Safari uses different MIME types for blobs
+        const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
+        if (isSafari) {
+            return 'audio/mp4';
+        }
+        return 'audio/webm; codecs=opus';
+    }
+
+    // Checkpoint system
+    var sessionId;
+    var checkpointInterval;
+    var lastCheckpointTime = 0;
+    var checkpointDB;
+    const CHECKPOINT_INTERVAL_MS = 60000; // 60 seconds
+
 
     var mute = false;
+    var recordingStarted = false;
+    var micAnalyser = null;
+    var micLevelInterval = null;
     var peerConnectionOfferAnswerCriteria =  {offerToReceiveAudio: true, offerToReceiveVideo: false };
     var AudioContext = window.AudioContext || window.webkitAudioContext;
 
@@ -204,6 +337,19 @@ function loadProps() {
     });
     return promise;
 }
+
+    function processOffer(data) {
+        pc.setRemoteDescription(data).then(_ =>
+            pc.createAnswer(peerConnectionOfferAnswerCriteria).then(ans => {
+                ans.sdp = tweakSDP(ans.sdp);
+                pc.setLocalDescription(ans).then(_ =>
+                    sendMessage(fid, mid, "answer", ans.sdp)
+                )
+            })
+        )
+            .catch((e) => console.log("set Remote offer error", e));
+    }
+
     function messageDeal(event){
         var lines = event.data.split("\n");
         console.log("message lines = ", lines.length);
@@ -223,15 +369,20 @@ function loadProps() {
                         stopCall();
                         document.location = document.location;
                     } else {
-                        pc.setRemoteDescription(data).then(_ =>
-                            pc.createAnswer(peerConnectionOfferAnswerCriteria).then(ans => {
-                                ans.sdp = tweakSDP(ans.sdp);
-                                pc.setLocalDescription(ans).then(_ =>
-                                    sendMessage(fid, mid, "answer", ans.sdp)
-                                )
-                            })
-                        )
-                            .catch((e) => console.log("set Remote offer error", e));
+                        // Handle race condition: if pc not ready yet, wait for it
+                        if (!pc) {
+                            console.log("Received offer before pc ready, queuing...");
+                            // Wait for setupRTC to complete
+                            var waitForPC = setInterval(function() {
+                                if (pc) {
+                                    clearInterval(waitForPC);
+                                    console.log("pc now ready, processing queued offer");
+                                    processOffer(data);
+                                }
+                            }, 100);
+                        } else {
+                            processOffer(data);
+                        }
                     }
                     break;
                 case "answer":
@@ -284,8 +435,10 @@ function loadProps() {
             })
             .catch(e => console.log("offer not created due to ", e) );
     }
-    function saveData(blob) {
-        var fileName = 'distributedFuture-'+new Date().toISOString() + '.webm';
+    function saveData(blob, suffix) {
+        var isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
+        var extension = isSafari ? '.mp4' : '.webm';
+        var fileName = 'distributedFuture-' + new Date().toISOString() + '-' + suffix + extension;
 
         console.log("Save data ?");
         var a = document.createElement("a");
@@ -297,22 +450,315 @@ function loadProps() {
         a.download = fileName;
         a.click();
         window.URL.revokeObjectURL(url);
-        saved = true;
-        $("#status").text("Call saved as "+fileName);
+        return fileName;
+    }
 
+    // IndexedDB Checkpoint functions
+    function initCheckpointDB() {
+        return new Promise((resolve, reject) => {
+            const request = indexedDB.open('PodCallCheckpoints', 1);
+            request.onerror = () => reject('IndexedDB error');
+            request.onsuccess = (e) => {
+                checkpointDB = e.target.result;
+                resolve(checkpointDB);
+            };
+            request.onupgradeneeded = (e) => {
+                const db = e.target.result;
+                if (!db.objectStoreNames.contains('checkpoints')) {
+                    const store = db.createObjectStore('checkpoints', { keyPath: 'id', autoIncrement: true });
+                    store.createIndex('sessionId', 'sessionId', { unique: false });
+                    store.createIndex('timestamp', 'timestamp', { unique: false });
+                }
+            };
+        });
+    }
+
+    function saveCheckpoint(hostBlob, guestBlob, duration) {
+        if (!checkpointDB) return Promise.reject('DB not initialized');
+
+        return new Promise((resolve, reject) => {
+            const transaction = checkpointDB.transaction(['checkpoints'], 'readwrite');
+            const store = transaction.objectStore('checkpoints');
+            const index = store.index('sessionId');
+
+            // Delete previous checkpoint for this session
+            const deleteReq = index.openCursor(IDBKeyRange.only(sessionId));
+            deleteReq.onsuccess = (e) => {
+                const cursor = e.target.result;
+                if (cursor) {
+                    cursor.delete();
+                    cursor.continue();
+                }
+            };
+
+            // Add new checkpoint
+            const checkpoint = {
+                sessionId: sessionId,
+                timestamp: Date.now(),
+                hostBlob: hostBlob,
+                guestBlob: guestBlob,
+                duration: duration
+            };
+            const addReq = store.add(checkpoint);
+            addReq.onsuccess = () => {
+                console.log('Checkpoint saved');
+                resolve();
+            };
+            addReq.onerror = () => reject('Failed to save checkpoint');
+        });
+    }
+
+    function getCheckpoints() {
+        return new Promise((resolve, reject) => {
+            if (!checkpointDB) return reject('DB not initialized');
+            const transaction = checkpointDB.transaction(['checkpoints'], 'readonly');
+            const store = transaction.objectStore('checkpoints');
+            const request = store.getAll();
+            request.onsuccess = () => resolve(request.result);
+            request.onerror = () => reject('Failed to get checkpoints');
+        });
+    }
+
+    function deleteCheckpoint(id) {
+        return new Promise((resolve, reject) => {
+            if (!checkpointDB) return reject('DB not initialized');
+            const transaction = checkpointDB.transaction(['checkpoints'], 'readwrite');
+            const store = transaction.objectStore('checkpoints');
+            const request = store.delete(id);
+            request.onsuccess = () => resolve();
+            request.onerror = () => reject('Failed to delete checkpoint');
+        });
+    }
+
+    function downloadBlob(blob, suffix) {
+        var a = document.createElement("a");
+        document.body.appendChild(a);
+        a.style = "display: none";
+        var url = window.URL.createObjectURL(blob);
+        a.href = url;
+        var isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
+        var extension = isSafari ? '.mp4' : '.webm';
+        a.download = 'distributedFuture-' + new Date(blob.timestamp || Date.now()).toISOString() + '-' + suffix + extension;
+        a.click();
+        window.URL.revokeObjectURL(url);
+        a.remove();
+    }
+
+    // HTML escape function to prevent XSS
+    function escapeHtml(unsafe) {
+        if (typeof unsafe !== 'string') return unsafe;
+        return unsafe
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#039;");
     }
 
     function stopCall(){
         localStream.getAudioTracks()[0].stop();
+
+        // Clear checkpoint interval
+        if (checkpointInterval) {
+            clearInterval(checkpointInterval);
+        }
+
         if (initiator) {
-            recorder.stop();
+            $("#status").text("Saving recordings...");
+            // Stop both recorders
+            if (recorderHost && recorderHost.state !== 'inactive') {
+                recorderHost.stop();
+            }
+            if (recorderGuest && recorderGuest.state !== 'inactive') {
+                recorderGuest.stop();
+            }
         } else {
             clearInterval(recorder);
         }
-// save file here....
+
         $("#status").text("Call ended.");
 
+        // Show restart button
+        $("#restartCall").show();
 
+        // Show checkpoints modal
+        showCheckpointsModal();
+    }
+
+    function restartCall(){
+        // Clear the current recording and start over by reloading the page
+        $("#restartConfirm").modal('hide');
+        document.location = document.location;
+    }
+
+    function startRecording() {
+        if (!initiator || recordingStarted) return;
+
+        recordingStarted = true;
+
+        // Start both recorders
+        if (recorderHost && recorderHost.state === 'inactive') {
+            recorderHost.start(10000);
+        }
+        if (recorderGuest && recorderGuest.state === 'inactive') {
+            recorderGuest.start(10000);
+        }
+
+        // Set up checkpoint interval
+        checkpointInterval = setInterval(function() {
+            if (hostChunks.length > 0 || guestChunks.length > 0) {
+                var duration = Date.now() - startRecTime;
+                var hostBlob = new Blob(hostChunks, { 'type' : getBlobMimeType() });
+                var guestBlob = new Blob(guestChunks, { 'type' : getBlobMimeType() });
+                saveCheckpoint(hostBlob, guestBlob, duration);
+                console.log("Checkpoint saved at " + duration + "ms");
+                $("#status").text("Recording... Checkpoint saved (" + Math.floor(duration/60000) + ":" + String(Math.floor((duration%60000)/1000)).padStart(2,'0') + ")");
+            }
+        }, CHECKPOINT_INTERVAL_MS);
+
+        // Set onbeforeunload
+        window.onbeforeunload = function() {
+            if (!hostSaved || !guestSaved) {
+                return "Recording in progress. If you leave this page, you will lose the audio files.";
+            }
+            return null;
+        };
+
+        // Update UI
+        $("#startRecording").hide();
+        $("#stopCall").show();
+        $("#status").text("Recording...");
+    }
+
+    function startMicLevelMonitoring() {
+        if (!localStream || !myac) return;
+
+        // Create analyser for mic level
+        var source = myac.createMediaStreamSource(localStream);
+        micAnalyser = myac.createAnalyser();
+        micAnalyser.fftSize = 256;
+        source.connect(micAnalyser);
+
+        var dataArray = new Uint8Array(micAnalyser.frequencyBinCount);
+
+        micLevelInterval = setInterval(function() {
+            if (mute) {
+                $("#micLevel").css('width', '0%').removeClass('bg-success bg-warning bg-danger').addClass('bg-secondary');
+                return;
+            }
+
+            micAnalyser.getByteFrequencyData(dataArray);
+
+            // Calculate average level
+            var sum = 0;
+            for (var i = 0; i < dataArray.length; i++) {
+                sum += dataArray[i];
+            }
+            var average = sum / dataArray.length;
+
+            // Convert to percentage (0-100)
+            var level = Math.min(100, Math.round((average / 128) * 100));
+
+            // Update progress bar
+            $("#micLevel").css('width', level + '%');
+
+            // Change color based on level
+            $("#micLevel").removeClass('bg-success bg-warning bg-danger bg-secondary');
+            if (level < 20) {
+                $("#micLevel").addClass('bg-danger'); // Too quiet
+            } else if (level < 40) {
+                $("#micLevel").addClass('bg-warning'); // A bit quiet
+            } else if (level < 80) {
+                $("#micLevel").addClass('bg-success'); // Good level
+            } else {
+                $("#micLevel").addClass('bg-warning'); // Too loud (clipping risk)
+            }
+        }, 100);
+    }
+
+    function showCheckpointsModal() {
+        getCheckpoints().then(checkpoints => {
+            var modalHtml = '<div id="checkpointsModal" class="modal" tabindex="-1" role="dialog">' +
+                '<div class="modal-dialog" role="document" style="max-width: 800px;">' +
+                '<div class="modal-content">' +
+                '<div class="modal-header">' +
+                '<h5 class="modal-title">Recording Checkpoints</h5>' +
+                '<button type="button" class="close" data-dismiss="modal" aria-label="Close">' +
+                '<span aria-hidden="true">&times;</span>' +
+                '</button>' +
+                '</div>' +
+                '<div class="modal-body">';
+
+            if (checkpoints.length === 0) {
+                modalHtml += '<p>No checkpoints available.</p>';
+            } else {
+                // Sort by timestamp descending (newest first)
+                checkpoints.sort((a, b) => b.timestamp - a.timestamp);
+
+                checkpoints.forEach(cp => {
+                    var date = new Date(cp.timestamp);
+                    var durationMins = Math.floor(cp.duration / 60000);
+                    var durationSecs = Math.floor((cp.duration % 60000) / 1000);
+                    // Escape all dynamic data to prevent XSS
+                    var safeSessionId = escapeHtml(cp.sessionId ? cp.sessionId.substring(0, 16) : '');
+                    var safeDateStr = escapeHtml(date.toLocaleString());
+                    var safeDuration = escapeHtml(durationMins + ':' + String(durationSecs).padStart(2, '0'));
+                    var safeId = escapeHtml(String(cp.id));
+
+                    modalHtml += '<div class="card mb-3">' +
+                        '<div class="card-body">' +
+                        '<h6 class="card-title">Session: ' + safeSessionId + '...</h6>' +
+                        '<p class="card-text">' +
+                        '<small class="text-muted">Saved: ' + safeDateStr + '</small><br>' +
+                        '<small class="text-muted">Duration: ' + safeDuration + '</small>' +
+                        '</p>' +
+                        '<button class="btn btn-sm btn-primary download-host" data-id="' + safeId + '">Download Host</button> ' +
+                        '<button class="btn btn-sm btn-primary download-guest" data-id="' + safeId + '">Download Guest</button> ' +
+                        '<button class="btn btn-sm btn-danger delete-checkpoint" data-id="' + safeId + '">Delete</button>' +
+                        '</div>' +
+                        '</div>';
+                });
+            }
+
+            modalHtml += '</div>' +
+                '<div class="modal-footer">' +
+                '<button type="button" class="btn btn-secondary" data-dismiss="modal">Close</button>' +
+                '</div>' +
+                '</div>' +
+                '</div>' +
+                '</div>';
+
+            // Remove existing modal if present
+            $('#checkpointsModal').remove();
+
+            // Add new modal
+            $('body').append(modalHtml);
+
+            // Bind click events
+            $('.download-host').click(function() {
+                var id = parseInt($(this).data('id'));
+                var cp = checkpoints.find(c => c.id === id);
+                if (cp) downloadBlob(cp.hostBlob, 'host');
+            });
+
+            $('.download-guest').click(function() {
+                var id = parseInt($(this).data('id'));
+                var cp = checkpoints.find(c => c.id === id);
+                if (cp) downloadBlob(cp.guestBlob, 'guest');
+            });
+
+            $('.delete-checkpoint').click(function() {
+                var id = parseInt($(this).data('id'));
+                deleteCheckpoint(id).then(() => {
+                    $('#checkpointsModal').modal('hide');
+                    setTimeout(showCheckpointsModal, 300);
+                });
+            });
+
+            $('#checkpointsModal').modal('show');
+        }).catch(err => {
+            console.error('Failed to load checkpoints:', err);
+        });
     }
 
 
@@ -385,35 +831,72 @@ function loadProps() {
         if (kind.indexOf("audio")!= -1) {
             document.getElementById("them").srcObject = stream;
             var peer = myac.createMediaStreamSource(stream);
-            if (initiator) {
-                if (softstereo){
-                    let panyou = myac.createStereoPanner();
-                    panyou.pan.value = +0.3;
-                    peer.connect(panyou)
-                    panyou.connect(dcomp);
-                } else {
-                    let splityou = myac.createChannelSplitter(2); // 2 outputs L and R
-                    peer.connect(splityou);
-                    splityou.connect(join, 1, 1);
-                    // join already connected to dcomp
-                }
 
-                var recStream = myac.createMediaStreamDestination();
-                recorder = new MediaRecorder(recStream.stream);
-                dcomp.connect(recStream);
-                recorder.ondataavailable = function(evt) {
-                    chunks.push(evt.data);
+            // Generate session ID for this recording
+            sessionId = 'session-' + Date.now();
+
+            if (initiator) {
+                // Create separate recording destinations for host and guest tracks
+                var recStreamHost = myac.createMediaStreamDestination();
+                var recStreamGuest = myac.createMediaStreamDestination();
+
+                // Connect guest (remote) audio to guest recorder
+                peer.connect(recStreamGuest);
+
+                // Setup host recorder (local microphone)
+                // The local stream source is already connected to dcomp in setupAudio
+                // We need to also connect it to recStreamHost
+                var localNode = myac.createMediaStreamSource(localStream);
+                localNode.connect(recStreamHost);
+
+                // Create host recorder
+                var mimeType = getSupportedMimeType();
+                var options = mimeType ? { mimeType: mimeType } : {};
+                recorderHost = new MediaRecorder(recStreamHost.stream, options);
+                recorderHost.ondataavailable = function(evt) {
+                    hostChunks.push(evt.data);
                     repaintDuration();
                 };
-                recorder.onstop = function(evt) {
-                    // Make blob out of our blobs, and open it.
-                    var blob = new Blob(chunks, { 'type' : 'audio/ogg; codecs=opus' });
-                    saveData(blob)
+                recorderHost.onstop = function(evt) {
+                    var blob = new Blob(hostChunks, { 'type' : getBlobMimeType() });
+                    var fileName = saveData(blob, 'host');
+                    hostSaved = true;
+                    console.log("Host track saved: " + fileName);
+
+                    // Save as final checkpoint
+                    var duration = Date.now() - startRecTime;
+                    if (guestSaved) {
+                        saveCheckpoint(blob, new Blob(guestChunks, { 'type' : getBlobMimeType() }), duration);
+                    }
                 };
+
+                // Create guest recorder
+                recorderGuest = new MediaRecorder(recStreamGuest.stream, options);
+                recorderGuest.ondataavailable = function(evt) {
+                    guestChunks.push(evt.data);
+                    repaintDuration();
+                };
+                recorderGuest.onstop = function(evt) {
+                    var blob = new Blob(guestChunks, { 'type' : getBlobMimeType() });
+                    var fileName = saveData(blob, 'guest');
+                    guestSaved = true;
+                    console.log("Guest track saved: " + fileName);
+
+                    // Save as final checkpoint
+                    var duration = Date.now() - startRecTime;
+                    if (hostSaved) {
+                        saveCheckpoint(new Blob(hostChunks, { 'type' : getBlobMimeType() }), blob, duration);
+                    }
+                };
+
                 stream.onremovetrack = function(event) {
                     console.log( "Removed track : " + event.track.kind + ": " + event.track.label);
                 };
-                recorder.start(10000);
+
+                // Don't auto-start recording - wait for user to click Start Recording
+                $("#status").text("Connected. Press Start Recording to begin.");
+                $("#startRecording").show();
+
             } else {
                 recorder = window.setInterval(repaintDuration,10000);
             }
@@ -426,6 +909,9 @@ function loadProps() {
             console.log('Audio sample Rate is '+ myac.sampleRate);
             $("#chosenAction").show();
             $("#statsZone").show();
+
+            // Start mic level monitoring
+            startMicLevelMonitoring();
         }
     }
 
@@ -485,11 +971,6 @@ function loadProps() {
                 while (can = lcandyStash.pop()) {
                     console.log("popping candidate off stash")
                     sendMessage(fid, mid, "candidate", can.candidate);
-                }
-                var act = $("#stopCall");
-                act.click( _ => stopCall() );
-                window.onbeforeunload = function() {
-                    return !saved ? "If you leave this page you will end the interview." : null;
                 }
             }
         };
@@ -606,6 +1087,7 @@ function accepted() {
                 console.log("href = "+url);
                 if (url) {
                     qrcode.makeCode(url);
+                    $("#shareUrl").val(url);
                 }
                 initiator = (mid === cid);
                 var smodal;
@@ -695,6 +1177,15 @@ function isWebrtcSupported() {
         $("#chosenAction").hide();
         $("#packetLoss").hide();
         $("#statsZone").hide();
+
+        // Initialize checkpoint database
+        initCheckpointDB().then(() => {
+            console.log("Checkpoint DB initialized");
+            $("#viewCheckpoints").click(showCheckpointsModal);
+        }).catch(err => {
+            console.error("Failed to initialize checkpoint DB:", err);
+        });
+
         if (isFacebookApp()){
             $("#status").text("Facebook apps block webrtc in their 'browser' ");
             $("#facebookapp").show();
@@ -704,6 +1195,14 @@ function isWebrtcSupported() {
                 console.log("I see webRTC !");
                 $("#status").text("Have webRTC available ");
                 $("#mute").click(_ => setMute(!mute));
+                $("#startRecording").click(_ => startRecording());
+                $("#restartCall").click(_ => $("#restartConfirm").modal('show'));
+                $("#confirmRestart").click(_ => restartCall());
+                $("#stopCall").click(_ => $("#stopConfirm").modal('show'));
+                $("#confirmStop").click(_ => {
+                    $("#stopConfirm").modal('hide');
+                    stopCall();
+                });
                 loadProps().then((props) => {
                     properties = props;
                     setRole();
